@@ -253,7 +253,7 @@
                 "children": [
                     {
                         "type": "menu-item",
-                        "label": "Ants",
+                        "label": "F# Ant Colony Fable Edition",
                         "fsharpCode": "games/ants.fs",
                         "htmlCode": "games/ants.html"
                     },
