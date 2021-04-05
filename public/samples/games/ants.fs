@@ -7,19 +7,14 @@ open Browser
 
 module Types =
 
-    open System
-
-    let xSize = 15
-    let ySize = 15
-    let nestSize = 3
+    let xSize = 50
+    let ySize = 50
+    let nestSize = 5
     let maxTotalFoodPerSquare = 200
-    let minGeneratedFoodPerSquare = 10
-    let maxGeneratedFoodPerSquare = 50
+    let minGeneratedFoodPerSquare = 20
+    let maxGeneratedFoodPerSquare = 100
     let maxFoodAntCanCarry = 5
-    let chanceOfFood = 0.12
-
-    let spawnFood = 50
-    let maxAntWounds = 2
+    let chanceOfFood = 0.04
 
     let maxCellPheromoneQuantity = 255
     let maxAntDropPheromoneQunatity = 50
@@ -29,6 +24,7 @@ module Types =
     let maxWorldCycles = 1500
 
     type UID = { X: int; Y: int }
+
     let uid (x, y) = { X = x; Y = y}
 
     //type PheromoneType =
@@ -37,31 +33,20 @@ module Types =
     //    | Gross = 2
 
     type AntColor =
-        | Black
+        | Black 
         | Red
-        with
-            member t.Other = 
-                match t with
-                | Black -> Red
-                | Red -> Black
-                
+
     type WorldCellType =
             | FieldCell
             | NestCell of AntColor
 
-    [<Struct>] 
-    type Ant =
-        val Color: AntColor
-        val FoodCarried: int
-        val Wounds: int
-        new (color) = { Color = color; FoodCarried = 0; Wounds = 0}
-        new (color, food) = { Color = color; FoodCarried = food; Wounds = 0 }
-        new (color, food, wounds) = { Color = color; FoodCarried = food; Wounds = wounds }
-        member internal x.UpdateFood newFood = new Ant(x.Color, newFood)
-        member internal x.UpdateWounds newWounds = new Ant(x.Color, x.FoodCarried, newWounds)
-        member x.IsFullOfFood = x.FoodCarried >= maxFoodAntCanCarry
-        member x.HasFood = x.FoodCarried > 0
-        member x.MaxPheromonesToDrop = maxAntDropPheromoneQunatity
+    type Ant = {
+        Color : AntColor
+        FoodCarried : int }
+        with
+            member x.IsFullOfFood = x.FoodCarried >= maxFoodAntCanCarry
+            member x.HasFood = x.FoodCarried > 0
+            member x.MaxPheromonesToDrop = maxAntDropPheromoneQunatity
 
     and WorldCell = {
         Id : UID
@@ -71,13 +56,22 @@ module Types =
         Pheromones : Map<AntColor, int> }
         with
             member t.IsFullOfFood = t.Food >= maxTotalFoodPerSquare
+            member t.HasFood = t.Food > 0
+            member t.ContainsAnt = t.Ant.IsSome
+            member t.HasPheromone color = not (t.Pheromones.[color] = 0)
+            member t.MaxPheromones = maxCellPheromoneQuantity
+            member t.MaxFood = maxTotalFoodPerSquare
 
-    and TheWorld = Map<UID, WorldCell>    
+    and TheWorld = Map<UID, WorldCell>
 
-    type WorldChange = TheWorld -> TheWorld
+    and AntAction =
+        | Nothing
+        | Move of WorldCell
+        | TakeFood of WorldCell
+        | DropFood of WorldCell
+        | DropPheromone of WorldCell * int
 
-    [<Struct>] 
-    type Nest(ix: int, iy: int, sizex: int, sizey: int) =
+    type Nest(ix, iy, sizex, sizey) =
         member internal t.MinX = ix
         member internal t.MinY = iy
         member internal t.MaxX = ix + sizex
@@ -89,100 +83,14 @@ module Types =
                 let pow x = x * x 
                 sqrt (pow(double cx - double x) + pow(double cy - double y))
         member t.CountFood (world: TheWorld) = 
-                let t = t in Map.fold (fun s (k: UID) v -> if t.IsInBounds k.X k.Y then s + v.Food else s) 0 world   
-        member internal t.CellsWithMaxFood (world: TheWorld) = 
-                let t = t in
-                    Map.filter (fun (k: UID) v -> t.IsInBounds k.X k.Y) world   
-                    |> Map.toList
-                    |> List.filter (fun (k,v) -> v.IsFullOfFood)
-
-
-module UserTypes =
-
-    open Types
-
-    /// Represents an ant's view of another ant (or him/her self)
-    [<Struct>]
-    type AntView (ant: Ant, viewingAnt: Ant) = 
-        /// The amount of food carried by this ant
-        member t.FoodCarried = ant.FoodCarried
-        /// True if the ant is carrying food, false otherwise
-        member t.CarryingFood = ant.FoodCarried > 0
-        /// True if the ant is carrying it's maximum amount of food, false otherwise
-        member t.CarryingMaxFood = ant.FoodCarried = maxFoodAntCanCarry
-        /// True if the ant is wounded, false otherwise
-        member t.IsWounded = ant.Wounds > 0
-        /// True if the ant is an enemy, false otherwise
-        member t.IsEnemy = ant.Color <> viewingAnt.Color
-
-    /// Represents an ant's view of a particular cell
-    [<Struct>] 
-    type AntCellView (wc: WorldCell, ant: Ant, nest: Nest) =
-        /// True when the cell cannot contain any more food, false otherwise
-        member t.IsFullOfFood = wc.Food >= maxTotalFoodPerSquare
-        /// True when the cell contains some food, false otherwise
-        member t.HasFood = wc.Food > 0
-        /// The amount of food the cell contains. 0 if none
-        member t.FoodContained = wc.Food
-        /// True when the cell contains an enemy ant, false otherwise
-        member t.ContainsEnemyAnt = match wc.Ant with | Some wcant -> wcant.Color <> ant.Color | None -> false
-        /// True the the cell contains any ant, false otherwise
-        member t.ContainsAnt = wc.Ant.IsSome
-        /// The ant occupying this cell, if any
-        member t.Ant = let ant = ant in wc.Ant |> Option.map (fun a -> AntView(a, ant))
-        /// True if the cell contains a friendly pheromone signal, false otherwise
-        member t.HasFriendlyPheromone = not (wc.Pheromones.[ant.Color] = 0)
-        /// Returns the quantity of friendly pheromone in this cell, 0 if none
-        member t.FriendlyPheromoneQuantity = wc.Pheromones.[ant.Color]
-        /// True if the cell contains an enemy pheromone, false otherwise
-        member t.HasEnemyPheromone = not (wc.Pheromones.[ant.Color.Other] = 0)
-        /// Returns the quantity of enemy pheromone in this cell, 0 if none
-        member t.EnemyPheromoneQuantity = wc.Pheromones.[ant.Color.Other]
-        /// Returns the maximum amount of pheromones this cell can contain, 0 is always the minimum
-        member t.MaxPheromones = maxCellPheromoneQuantity
-        /// Returns the maximum amount of food this cell can contain, 0 is always the minimum
-        member t.MaxFood = maxTotalFoodPerSquare    
-        /// True if the cell is a friendly nest cell, false otherwise
-        member t.IsMyNest = wc.CellType = WorldCellType.NestCell(ant.Color)
-        /// True if the cell is an enemy nest cell, false otherwise
-        member t.IsEnemyNest = wc.CellType = WorldCellType.NestCell(ant.Color.Other)
-        /// Returns the distance in cells from this cell to the your friendly nest
-        member t.DistanceToNest = if wc.CellType = WorldCellType.NestCell(ant.Color) then 0.0 else nest.Distance wc
-        member internal t.WorldCell = wc
-
-    /// Represents an ant's view of surrounding cells.
-    [<Struct>] 
-    type AntNearbyView (cells: AntCellView list) = 
-        static member internal FromWorldCells worldcells ant nest = worldcells |> List.map (fun c -> AntCellView(c, ant, nest)) |> (fun acvs -> AntNearbyView acvs)
-        /// A list of all neighboring cells
-        member t.Cells = cells
-        /// A list of neighboring cells which do not contain ants
-        member t.EmptyCells = cells |> List.filter (fun c -> not c.ContainsAnt)
-        /// A list of neighboring cells which contain enemy ants
-        member t.EnemyCells = cells |> List.filter (fun c -> c.ContainsEnemyAnt)
-        /// A list of neighboring cells which are part of the friendly nest
-        member t.MyNestCells = cells |> List.filter (fun c -> c.IsMyNest)
-        /// A list of neighboring cells which are part of the enemy nest
-        member t.EnemyNestCells = cells |> List.filter (fun c -> c.IsEnemyNest)
-        /// A list of neighboring cells which contain food but are not part of the friendly nest 
-        member t.FoodCollectionCells = cells |> List.filter (fun c -> not c.IsMyNest && c.HasFood)
-        /// A list of neighboring cells which contain friendly pheromones and no ants
-        member t.FriendlyPheromoneCells = cells |> List.filter (fun c -> not c.ContainsAnt && c.HasFriendlyPheromone)
-        /// A list of neighboring cells which are nest cells and are not full of food
-        member t.FoodDropCells = t.MyNestCells |> List.filter (fun c -> not c.IsFullOfFood)
-
-    type AntAction =
-        | Nothing
-        | Move of AntCellView
-        | TakeFood of AntCellView
-        | DropFood of AntCellView
-        | DropPheromone of AntCellView * int
-        | Attack of AntCellView
-
+                Map.fold (fun s (k: UID) v -> if t.IsInBounds k.X k.Y then s + v.Food else s) 0 world
+            
 
     type IAntBehavior =
         abstract member Name : string
-        abstract member Behave : AntView -> AntCellView -> AntNearbyView -> AntAction     
+        abstract member Behave : Ant -> WorldCell -> WorldCell list -> Nest -> AntAction     
+
+    type WorldChange = TheWorld -> TheWorld
 
 module Helpers =
 
@@ -222,7 +130,6 @@ module World =
 
     open Types
     open Helpers
-    open UserTypes
 
     let BlackAntNest = new Nest( 0, 0, nestSize - 1, nestSize - 1 )
     let RedAntNest = new Nest( 1 + xSize - nestSize, 1 + ySize - nestSize, nestSize - 1, nestSize - 1)
@@ -232,10 +139,17 @@ module World =
         elif RedAntNest.IsInBounds x y then InRedNest
         else Neither
 
-    let getAntNest (ant: Ant) =
+    let getAntNest ant =
         match ant.Color with
         | AntColor.Black -> BlackAntNest
         | AntColor.Red -> RedAntNest
+
+    //let emptyPheromoneSet = Map.ofSeq 
+    //                        <| seq { let colors = Enum.GetValues(typeof<AntColor>) :?> AntColor array
+    //                                 let smells = Enum.GetValues(typeof<PheromoneType>) :?> PheromoneType array
+    //                                 for color in colors do 
+    //                                    for smell in smells do 
+    //                                        yield (color, smell), 0 }
 
     let emptyPheromoneSet = Map.ofSeq 
                             <| seq { let colors = [| AntColor.Black; AntColor.Red |]
@@ -243,8 +157,8 @@ module World =
                                         yield color, 0 }
 
     let defaultCell id = {Id = id; Food = 0; Ant = None; CellType = FieldCell; Pheromones = emptyPheromoneSet }
-    let defaultBlackAnt = Some <| Ant(AntColor.Black, 0)
-    let defaultRedAnt = Some <| Ant(AntColor.Red, 0)
+    let defaultBlackAnt = Some { Color = AntColor.Black; FoodCarried = 0 }
+    let defaultRedAnt = Some { Color = AntColor.Red; FoodCarried = 0 }
 
     let buildWorldInitialWorld () =
         let rnd = new System.Random() in 
@@ -270,35 +184,24 @@ module World =
                 | None -> state
                 | Some(ant) ->
                     let visibleCells = [ getWorldCell x (y - 1); getWorldCell x (y + 1); getWorldCell (x - 1) y; getWorldCell (x + 1) y ]
-                                    |> List.choose id
+                                        |> List.choose id
                     state @ [ant, cell, visibleCells, getAntNest ant])
             [] world
 
     let getAntActions (bBehave: IAntBehavior) (rBehave: IAntBehavior) (views: (Ant * WorldCell * WorldCell list * Nest) list) =
-        let getAntBehavior (ant: Ant) =
+        let getAntBehavior ant =
             match ant.Color with
             | AntColor.Black -> bBehave
             | AntColor.Red -> rBehave
         views |> List.map (fun (ant, cell, antView, nest) -> let behavior = getAntBehavior ant in 
-                                                                cell, behavior.Behave (AntView(ant, ant)) (AntCellView (cell, ant, nest)) (AntNearbyView.FromWorldCells antView ant nest))
-    let buildDependentTransaction (expectedCells: WorldCell list) actions = 
-        let predicate = (fun (world: TheWorld) -> expectedCells |> List.forall (fun (cell: WorldCell) -> (Map.find cell.Id world) = cell))
+                                                                cell, behavior.Behave ant cell antView nest)
+
+    let buildTransaction (expectedCells: WorldCell list) actions = 
+        let predicate = (fun (world: TheWorld) -> List.forall (fun (cell: WorldCell) -> (Map.find cell.Id world) = cell) expectedCells)
         let action = (fun (iworld: TheWorld) -> 
             List.fold (fun (cworld: TheWorld) (id, action) ->
                 Map.add id (action cworld.[id]) cworld) iworld actions)
-        predicate, action  
-
-    let dropPheromonesInTargetCell antColor quantity target = 
-        let newValue = max (target.Pheromones.[antColor] + quantity) maxCellPheromoneQuantity in 
-            { target with Pheromones = target.Pheromones.Add(antColor, newValue ) } 
-
-    let woundAntInTargetCell oldtarget =
-        match oldtarget.Ant with
-        | None -> oldtarget
-        | Some (ant) ->
-            let newWounds = ant.Wounds + 1 
-            if newWounds >= maxAntWounds then { oldtarget with Ant = None } // Ant Dies
-            else { oldtarget with Ant = Some <| ant.UpdateWounds(newWounds) }
+        predicate, action
 
     let getWorldChangeTransactions actions =
         seq { for source, action in actions do
@@ -307,40 +210,33 @@ module World =
                 | Nothing -> ()
                 | Move (target) -> 
                     if Option.isSome target.Ant then ()
-                    else yield buildDependentTransaction 
-                                    [ source; target.WorldCell ]
-                                    [ source.Id,           (fun oldcell -> { oldcell with Ant = None });
-                                    target.WorldCell.Id, (fun oldtarget -> { oldtarget with Ant = source.Ant }) ]
+                    else yield buildTransaction 
+                                    [ source; target ]
+                                    [ source.Id, (fun oldcell -> { oldcell with Ant = None });
+                                        target.Id, (fun oldtarget -> { oldtarget with Ant = source.Ant }) ]
                 | TakeFood (target) -> 
-                    if target.WorldCell.Food <= 0 then ()
+                    if target.Food <= 0 then ()
                     else 
-                        let foodToGet = min (target.WorldCell.Food) (maxFoodAntCanCarry - ant.FoodCarried)
-                        yield buildDependentTransaction
-                                    [ source; target.WorldCell ]
-                                    [ target.WorldCell.Id, (fun oldtarget -> { oldtarget with Food = oldtarget.Food - foodToGet });
-                                    source.Id,           (fun oldcell -> { oldcell with Ant = Some <| ant.UpdateFood(ant.FoodCarried + foodToGet) } ) ]
+                        let foodToGet = min (target.Food) (maxFoodAntCanCarry - ant.FoodCarried)
+                        yield buildTransaction
+                                    [ source; target ]
+                                    [ target.Id, (fun oldtarget -> { oldtarget with Food = oldtarget.Food - foodToGet });
+                                        source.Id, (fun oldcell -> { oldcell with Ant = Some { ant with FoodCarried = ant.FoodCarried + foodToGet } } ) ]
                 | DropFood (target) -> 
-                    if target.WorldCell.Food >= maxTotalFoodPerSquare then ()
+                    if target.Food >= maxTotalFoodPerSquare then ()
                     else 
-                        let foodToDrop = min (maxTotalFoodPerSquare - target.WorldCell.Food) (ant.FoodCarried)
-                        yield buildDependentTransaction
-                                    [ source; target.WorldCell ]
-                                    [ target.WorldCell.Id, (fun oldtarget -> { oldtarget with Food = oldtarget.Food + foodToDrop });
-                                    source.Id,           (fun oldcell -> { source with Ant = Some <| ant.UpdateFood(ant.FoodCarried - foodToDrop) }) ] 
-                | DropPheromone (target, quantity) -> yield buildDependentTransaction [] [ target.WorldCell.Id, dropPheromonesInTargetCell ant.Color quantity ]
-                | Attack (target) -> yield buildDependentTransaction [ source; target.WorldCell ] [ target.WorldCell.Id, woundAntInTargetCell ]
-        }
-
-
-    let spawnAnts (world: TheWorld) =
-        world 
-        |> Map.map (fun uid cell -> 
-            if cell.Ant.IsNone && cell.Food >= spawnFood then
-                match uid.X, uid.Y with
-                | InBlackNest -> { cell with Ant = Some <| Ant(AntColor.Black); Food = cell.Food - spawnFood }
-                | InRedNest -> { cell with Ant = Some <| Ant(AntColor.Red); Food = cell.Food - spawnFood }
-                | Neither -> cell
-            else cell)
+                        let foodToDrop = min (maxTotalFoodPerSquare - target.Food) (ant.FoodCarried)
+                        let transaction =
+                            buildTransaction
+                                    [ source; target ]
+                                    [ target.Id, (fun oldtarget -> { oldtarget with Food = oldtarget.Food + foodToDrop });
+                                        source.Id, (fun oldcell -> { source with Ant = Some { ant with FoodCarried = ant.FoodCarried - foodToDrop } }) ]
+                        yield transaction
+                | DropPheromone (target, quantity) ->
+                    let newValue = max (target.Pheromones.[ant.Color] + quantity) maxCellPheromoneQuantity
+                    yield buildTransaction
+                                [ target ]
+                                [ target.Id, (fun oldtarget -> { oldtarget with Pheromones = oldtarget.Pheromones.Add(ant.Color, newValue ) } ) ] }
 
     let degradePheromones (world: TheWorld) = 
         world 
@@ -363,7 +259,6 @@ module World =
         |> getWorldChangeTransactions
         |> applyWorldTransactions world
         |> degradePheromones
-        |> spawnAnts
 
 module Canvas =
 
@@ -383,7 +278,7 @@ module Canvas =
 
     let drawBlob (color: string) (x, y) =
         context.beginPath()
-        context.arc(x, y, 3., 0., 2. * System.Math.PI, false )
+        context.arc(x, y, 4., 0., 2. * System.Math.PI, false )
         context.fillStyle <- !^ color
         context.fill()
 
@@ -402,15 +297,14 @@ module Canvas =
         if image.src.IndexOf(src) = -1 then image.src <- src
         image
 
-    let updateInput name (score:int) =
-        let image = document.getElementsByName(name).[0] :?> HTMLInputElement
-        image.value <- (string score)
+    let updateInput name text =
+        let image = document.getElementsByName(name).[0] :?> HTMLDivElement
+        image.innerHTML <- text
         image
 
 
 module Simulation =
     open Types
-    open UserTypes
     open World
     open Canvas
 
@@ -423,7 +317,7 @@ module Simulation =
 
     let drawFood x y = 
         let color = rgb 0 255 0
-        filled color (x, y, x + 5., y + 5.)
+        drawBlob color (x, y)
 
     let makeGradiant quantity max = (float quantity / float max)
     let drawPheromone x y antColor amount =
@@ -432,16 +326,16 @@ module Simulation =
             | AntColor.Black -> rgb 111 111 111
             | AntColor.Red -> rgb 111 0 111
         // let opacity = makeGradiant amount maxAntDropPheromoneQunatity
-        filled color (x, y, x + 5., y + 5.)
+        drawBlob color (x, y)
 
     let drawUpdates (width, height) (world: TheWorld) =
         let updateCell uid cell =
             let wm, hm = width / float (xSize + 1), height / float (ySize + 1)
-            let offset x y = x * wm, y * hm  
+            let offset x y = (x + 0.5) * wm, (y + 0.5) * hm  
             let x, y = uid2xy uid
             let ox, oy = offset (float x) (float y)
-            // cell.Pheromones |> Map.iter (fun color amount -> if amount > 0 then drawPheromone ox oy color amount)
-            // if cell.Food > 0 then drawFood ox oy                                     
+            cell.Pheromones |> Map.iter (fun color amount -> if amount > 0 then drawPheromone ox oy color amount)
+            if cell.Food > 0 then drawFood ox oy                                     
             if cell.Ant.IsSome then drawAnt ox oy cell.Ant.Value.Color
         world
         |> Map.iter updateCell
@@ -449,84 +343,84 @@ module Simulation =
 
 module HardishAI =
 
-    open UserTypes
     open Helpers
+    open Types
 
     let rnd = System.Random(int System.DateTime.Now.Ticks)
 
     type TestAntBehavior() =
         interface IAntBehavior with
             member x.Name = "Rick's Hardish" 
-            member x.Behave me here locations = 
+            member x.Behave me here locations nest = 
 
-                let locationsWithoutAnts = locations.EmptyCells
+                let isMyHome node = node.CellType = WorldCellType.NestCell(me.Color)
+                let locationsWithoutAnts = locations |> List.filter  (fun node -> node.Ant = None)
 
-                let (|CarryingFood|CarryingMaxFood|CarryingNoFood|) (ant: AntView) =
-                    if ant.CarryingMaxFood  then CarryingFood
-                    elif ant.CarryingFood then CarryingMaxFood
-                    else CarryingNoFood
+                let (|HasFood|HasMaxFood|HasNoFood|) (ant: Ant) = 
+                    if ant.FoodCarried = 0 then HasNoFood
+                    elif ant.FoodCarried = maxFoodAntCanCarry then HasMaxFood
+                    else HasFood
 
-                let (|NearHome|_|) (locations: AntCellView list) =
-                    let homeNodes = locations |> List.filter (fun node -> node.IsMyNest)
+                let (|NearHome|_|) (locations: WorldCell list) =
+                    let homeNodes = locations |> List.filter (fun node -> isMyHome node)
                     if List.isEmpty homeNodes then None
                     else Some homeNodes
                 
-                let (|AwayFromHome|NearHome|) (locations: AntCellView list) =
-                    let homeLocations, awayLocations = locations |> List.partition (fun node -> node.IsMyNest)
+                let (|AwayFromHome|NearHome|) (locations: WorldCell list) =
+                    let homeLocations, awayLocations = locations |> List.partition (fun node -> isMyHome node)
                     if List.isEmpty homeLocations then AwayFromHome awayLocations
                     else NearHome homeLocations 
 
-                let (|CanDrop|CantDrop|) (locations: AntCellView list) =
+                let (|CanDrop|CantDrop|) (locations: WorldCell list) =
                     let dropFoodLocations = locations |> List.filter (fun node -> not (node.IsFullOfFood))
                     if List.isEmpty dropFoodLocations then CantDrop
                     else CanDrop dropFoodLocations
 
-                let (|HasUnownedFood|_|) (locations: AntCellView list) = 
-                    let foodLocations = locations |> List.filter (fun node -> node.HasFood && not (node.IsMyNest))
+                let (|HasUnownedFood|_|) (locations: WorldCell list) = 
+                    let foodLocations = locations |> List.filter (fun node -> node.HasFood && not (isMyHome node))
                     if List.isEmpty foodLocations then None
                     else Some foodLocations
 
-                let (|HasPheromonesAndNoAnt|_|) (locations: AntCellView list) =
-                    let pheromoneLocations = locations |> List.filter (fun node -> node.Ant = None) |> List.filter (fun node -> node.HasFriendlyPheromone)
+                let (|HasPheromonesAndNoAnt|_|) (locations: WorldCell list) =
+                    let pheromoneLocations = locations |> List.filter (fun node -> node.Ant = None) |> List.filter (fun node -> node.HasPheromone me.Color)
                     if List.isEmpty pheromoneLocations then None
                     else Some pheromoneLocations
 
-                let (|HasNoAnt|_|) (locations: AntCellView list) =
+                let (|HasNoAnt|_|) (locations: WorldCell list) =
                     let emptyLocations = locations |> List.filter (fun node -> node.Ant = None)
                     if List.length emptyLocations > 0 then
                         Some (emptyLocations)
                     else None
                 
-                let (|ShortestDistanceWithNoAnt|_|)  (locations: AntCellView list) =
+                let (|ShortestDistanceWithNoAnt|_|)  (locations: WorldCell list) =
                     let noAnts = locations |> List.filter (fun node -> node.Ant = None)
-                    if List.length noAnts > 0 then Some (noAnts |> List.minBy (fun node -> node.DistanceToNest))
+                    if List.length noAnts > 0 then Some (noAnts |> List.minBy (fun node -> nest.Distance node))
                     else None
 
-                let maxFood = List.maxBy (fun (node: AntCellView) -> node.FoodContained)
-                let minPhero = List.minBy (fun (node: AntCellView) -> node.FriendlyPheromoneQuantity)
-                let noAnts = List.filter (fun (node: AntCellView) -> node.ContainsAnt)
-
+                let maxFood = List.maxBy (fun node -> node.Food)
+                let minPhero = List.minBy (fun node -> node.Pheromones.[me.Color])
+                let noAnts = List.filter (fun node -> node.Ant = None)
 
                 // [snippet:Simple Pheromone-Using Ant Colony AI]
                 match me with
-                | CarryingFood
-                | CarryingMaxFood -> 
-                    match locations.Cells with                    
+                | HasFood
+                | HasMaxFood -> 
+                    match locations with                    
                     | NearHome homeCells -> 
                         match homeCells with
                         | CanDrop dropCells -> DropFood dropCells.Head
                         | HasNoAnt noAntCells -> Move (List.random noAntCells)
                         | _ -> Nothing
                     | AwayFromHome allCells -> 
-                        match here.FriendlyPheromoneQuantity with
+                        match here.Pheromones.[me.Color] with
                         | n when n < 20 -> DropPheromone (here, 100 - n)
                         | _ -> 
                             match allCells with
                             | HasNoAnt noAnts when rnd.Next(0, 3) = 0 -> Move (List.random noAnts)
                             | ShortestDistanceWithNoAnt node -> Move node
                             | _ -> Nothing
-                | CarryingNoFood -> 
-                    match locations.Cells with
+                | HasNoFood -> 
+                    match locations with
                     | HasNoAnt noAnts when rnd.Next(0, 3) = 0 -> Move (List.random noAnts)                        
                     | HasUnownedFood foodCells -> TakeFood (maxFood foodCells)
                     | HasPheromonesAndNoAnt pheroCells -> Move (minPhero pheroCells)
@@ -534,9 +428,8 @@ module HardishAI =
                     | _ -> Nothing
 
 
-
 module AntsEverywhereExmampleAI =
-    open UserTypes
+    open Types
 
     let randomGen = new System.Random()
 
@@ -546,7 +439,7 @@ module AntsEverywhereExmampleAI =
     type TestAntBehavior() =
         interface IAntBehavior with
             member x.Name = "Frank_Levine"
-            member x.Behave me here locations =
+            member x.Behave me here locations nest =
             
                 // This Ant's basic strategy is this:
                 // If you have food and are near the nest
@@ -570,29 +463,35 @@ module AntsEverywhereExmampleAI =
             
                 //                                    
                 // helper functions
-                let isNest (cell: AntCellView) = cell.IsMyNest
+                let isNest (cell: WorldCell) = cell.CellType = WorldCellType.NestCell(me.Color)
             
                 // how do I negate a function?!?  this seems a bit heavy-handed
-                let isNotNest (cell: AntCellView) =
+                let isNotNest (cell: WorldCell) =
                     if isNest cell then
                         false
                     else
                         true
 
                 // nest cells that can receive food
-                let nestCells = locations.FoodDropCells
+                let nestCells = locations |> List.filter isNest
+                                        |> List.filter (fun c -> c.IsFullOfFood = false)
 
                 // all empty neighbors, sorted so we can get at the closest and farthest ones from the nest
                 // first = closest to nest
                 // last = farthest from nest
-                let emptyNeighbors = locations.EmptyCells |> List.sortBy (fun c -> c.DistanceToNest)                                     
+                let emptyNeighbors = locations |> List.filter (fun c -> c.ContainsAnt = false)
+                                            |> List.sortBy (fun c -> nest.Distance(c))                                     
 
                 // all empty neighbors with my pheromones
-                let emptyNeighborsWithP = locations.FriendlyPheromoneCells |> List.sortBy( fun c -> c.DistanceToNest) |> List.toArray
+                let emptyNeighborsWithP = emptyNeighbors |> List.filter( fun c -> c.HasPheromone(me.Color))                                                   
+                                                        |> List.sortBy( fun c -> nest.Distance(c))
+                                                        |> List.toArray
 
                 // all neighbors with food, ordered by the amount of food decending
-                let neighborsWithFood = locations.FoodCollectionCells
-                                        |> List.sortBy (fun c -> -c.FoodContained)
+                let neighborsWithFood = locations |> List.filter (isNotNest)
+                                                |> List.filter (fun c -> c.HasFood)
+                                                |> List.sortBy (fun c -> c.Food)
+                                                |> List.rev
 
                 // functions to make the code below more readable
                 // NullMove does nothing (like when you're boxed in)
@@ -611,17 +510,19 @@ module AntsEverywhereExmampleAI =
                 // has less than this number
                 let REFRESH_THRESHOLD = 50;
 
+
+
                 // active pattern to determine the ant's high-level state           
-                let (|ShouldDropFood|Forage|ReturnToNest|) (ant: AntView) =
+                let (|ShouldDropFood|Forage|ReturnToNest|) (ant: Ant) =
                     let haveAvailableNestCells = (nestCells.IsEmpty = false)
                     match ant with
-                        | a when a.CarryingFood && haveAvailableNestCells -> ShouldDropFood
-                        | a when a.CarryingMaxFood -> ReturnToNest
+                        | a when a.HasFood && haveAvailableNestCells -> ShouldDropFood
+                        | a when a.IsFullOfFood -> ReturnToNest
                         | _ -> Forage
 
                 // active pattern to decide if we need to refresh pheromones
-                let (|NeedsRefresh|NoRefresh|) (cell: AntCellView) =
-                    match cell.FriendlyPheromoneQuantity with
+                let (|NeedsRefresh|NoRefresh|) (cell: WorldCell) =
+                    match cell.Pheromones.[me.Color] with
                         | x when x < REFRESH_THRESHOLD ->
                             let amt = MAX_PHERO - x     // amt is the number of pheromones required to bring this cell back to 100
                             NeedsRefresh amt
@@ -630,9 +531,9 @@ module AntsEverywhereExmampleAI =
                 // gets the relative distance to the nest
                 // relativeDist > 0 --> cell is farther from the nest than 'here'
                 // relativeDist < 0 --> cell is closer to the nest than 'here'                   
-                let relativeDist (cell: AntCellView) =
-                    let dHere = here.DistanceToNest
-                    let dCell = cell.DistanceToNest
+                let relativeDist (cell: WorldCell) =
+                    let dHere = nest.Distance(here)
+                    let dCell = nest.Distance(cell)
                     dCell - dHere
 
                 // function to get the last thing from an array
@@ -641,7 +542,7 @@ module AntsEverywhereExmampleAI =
 
                 // the ant parameter isn't used, but I don't know how to make a
                 // parameterless active pattern
-                let (|AdjacentToFood|AdjacentToPheromone|NoMansLand|) (ant: AntView) =
+                let (|AdjacentToFood|AdjacentToPheromone|NoMansLand|) (ant: Ant) =
                     if neighborsWithFood.Length > 0 then
                         AdjacentToFood
                     elif emptyNeighborsWithP.Length > 0 && relativeDist (last emptyNeighborsWithP) > 0. then   
@@ -669,7 +570,6 @@ module AntsEverywhereExmampleAI =
 
 open Canvas
 open Types
-open UserTypes
 open World
 open Simulation
 
@@ -678,43 +578,54 @@ let origin =
     let topLocation = window.top.location
     topLocation.origin + topLocation.pathname
 
+let formatScoreCard bName bFood rName rFood = 
+    sprintf "Black (%s): %05d vs Red (%s): %05d" bName bFood rName rFood 
+
+let formatRemaining remaining =
+    sprintf "Remaining Cycles: %05d" remaining
+
+
 let maxCycles = 1000
 let world = ref (buildWorldInitialWorld())
 let foodToWin = int <| double (Map.fold (fun s k v -> s + v.Food) 0 !world) * percentFoodToWin
 let cycles = ref 0
 
-let blackAI = new HardishAI.TestAntBehavior()
-let redAI = new AntsEverywhereExmampleAI.TestAntBehavior()
+let blackAI = new HardishAI.TestAntBehavior() :> IAntBehavior
+let redAI = new AntsEverywhereExmampleAI.TestAntBehavior() :> IAntBehavior
 
 let render (w,h) =
-    // console.log(sprintf "%A" (w,h))
     cycles := !cycles + 1
 
-    let mutable bScore = 0
-    let mutable rScore = 0
-    for (k,v) in !world |> Map.toSeq do
-        match v.Ant with
-        | None -> ()
-        | Some (ant) -> 
-            if ant.Color = AntColor.Black then bScore <- bScore + 1
-            elif ant.Color = AntColor.Red then rScore <- rScore + 1
+    let bScore = BlackAntNest.CountFood !world
+    let rScore = RedAntNest.CountFood !world
 
-    updateInput "cycles" !cycles |> ignore
-    updateInput "bscore" bScore |> ignore
-    updateInput "rscore" rScore |> ignore
+    let remainig = maxCycles - !cycles  
 
-    if bScore = 0 || rScore = 0 || !cycles > maxCycles then
-        if bScore > rScore then raise (new System.Exception("Black"))
-        elif rScore > bScore then raise (new System.Exception("red"))
+    let scoreString = formatScoreCard blackAI.Name bScore redAI.Name rScore
+    updateInput "score" scoreString |> ignore
+
+    let remainingString = formatRemaining remainig
+    updateInput "secondline" remainingString |> ignore
+
 
     (0., 0., w, h) |> filled (rgb 174 238 238)
     drawUpdates (w,h) !world
     world := worldCycle blackAI redAI !world
 
+    if bScore > foodToWin || rScore > foodToWin || !cycles > maxCycles then
+        if bScore > rScore then Some blackAI.Name
+        elif rScore > bScore then Some redAI.Name
+        else None
+    else None
+ 
 let w, h = getWindowDimensions()
 
 let rec update () =
-    render (w,h) 
-    window.setTimeout(update, 1000 / 6) |> ignore
+    let result = render (w,h) 
+    match result with
+    | None ->
+        window.setTimeout(update, 1000 / 30) |> ignore
+    | Some winner -> 
+        updateInput "secondline" (sprintf "The winner is: %s" winner) |> ignore
 
 update ()
