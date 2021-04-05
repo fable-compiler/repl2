@@ -42,11 +42,6 @@ module Types =
 
     let uid (x, y) = { X = x; Y = y}
 
-    //type PheromoneType =
-    //    | Sweet = 0 
-    //    | Sour = 1
-    //    | Gross = 2
-
     type AntColor =
         | Black 
         | Red
@@ -55,20 +50,20 @@ module Types =
             | FieldCell
             | NestCell of AntColor
 
-    type Ant = {
-        Color : AntColor
-        FoodCarried : int }
+    type Ant = 
+        { Color : AntColor
+          FoodCarried : int }
         with
             member x.IsFullOfFood = x.FoodCarried >= maxFoodAntCanCarry
             member x.HasFood = x.FoodCarried > 0
             member x.MaxPheromonesToDrop = maxAntDropPheromoneQunatity
 
-    and WorldCell = {
-        Id : UID
-        Food : int
-        Ant : option<Ant> 
-        CellType : WorldCellType
-        Pheromones : Map<AntColor, int> }
+    and WorldCell = 
+        { Id : UID
+          Food : int
+          Ant : option<Ant> 
+          CellType : WorldCellType
+          Pheromones : Map<AntColor, int> }
         with
             member t.IsFullOfFood = t.Food >= maxTotalFoodPerSquare
             member t.HasFood = t.Food > 0
@@ -159,17 +154,11 @@ module World =
         | AntColor.Black -> BlackAntNest
         | AntColor.Red -> RedAntNest
 
-    //let emptyPheromoneSet = Map.ofSeq 
-    //                        <| seq { let colors = Enum.GetValues(typeof<AntColor>) :?> AntColor array
-    //                                 let smells = Enum.GetValues(typeof<PheromoneType>) :?> PheromoneType array
-    //                                 for color in colors do 
-    //                                    for smell in smells do 
-    //                                        yield (color, smell), 0 }
-
-    let emptyPheromoneSet = Map.ofSeq 
-                            <| seq { let colors = [| AntColor.Black; AntColor.Red |]
-                                    for color in colors do 
-                                        yield color, 0 }
+    let emptyPheromoneSet = 
+        seq { let colors = [| AntColor.Black; AntColor.Red |]
+              for color in colors do 
+                yield color, 0 }    
+        |> Map.ofSeq 
 
     let defaultCell id = {Id = id; Food = 0; Ant = None; CellType = FieldCell; Pheromones = emptyPheromoneSet }
     let defaultBlackAnt = Some { Color = AntColor.Black; FoodCarried = 0 }
@@ -177,7 +166,6 @@ module World =
 
     let buildWorldInitialWorld () =
         let rnd = new System.Random() in 
-            Map.ofSeq <|
             seq { for x in 0 .. xSize do
                     for y in 0 .. ySize do
                         let uid = uid (x, y)
@@ -189,33 +177,35 @@ module World =
                                             then yield uid, { defaultcell with Food = rnd.Next(minGeneratedFoodPerSquare, maxGeneratedFoodPerSquare) }
                                             else yield uid, defaultcell 
                 }
+            |> Map.ofSeq
 
     let getAntViews (world: TheWorld) = 
         let getWorldCell x y = Map.tryFind (uid (x,y)) world
-        Map.fold
-            (fun state (uid: UID) cell ->
+        let worldFold state (uid: UID) cell =
                 let x, y = (uid.X, uid.Y)
                 match cell.Ant with
                 | None -> state
                 | Some(ant) ->
                     let visibleCells = [ getWorldCell x (y - 1); getWorldCell x (y + 1); getWorldCell (x - 1) y; getWorldCell (x + 1) y ]
                                         |> List.choose id
-                    state @ [ant, cell, visibleCells, getAntNest ant])
-            [] world
+                    state @ [ant, cell, visibleCells, getAntNest ant]
+        Map.fold worldFold [] world
 
     let getAntActions (bBehave: IAntBehavior) (rBehave: IAntBehavior) (views: (Ant * WorldCell * WorldCell list * Nest) list) =
         let getAntBehavior ant =
             match ant.Color with
             | AntColor.Black -> bBehave
             | AntColor.Red -> rBehave
-        views |> List.map (fun (ant, cell, antView, nest) -> let behavior = getAntBehavior ant in 
-                                                                cell, behavior.Behave ant cell antView nest)
+        let transformView (ant, cell, antView, nest) =
+            let behavior = getAntBehavior ant in 
+            cell, behavior.Behave ant cell antView nest
+        List.map transformView views
 
     let buildTransaction (expectedCells: WorldCell list) actions = 
-        let predicate = (fun (world: TheWorld) -> List.forall (fun (cell: WorldCell) -> (Map.find cell.Id world) = cell) expectedCells)
-        let action = (fun (iworld: TheWorld) -> 
-            List.fold (fun (cworld: TheWorld) (id, action) ->
-                Map.add id (action cworld.[id]) cworld) iworld actions)
+        let predicate (world: TheWorld) = 
+            List.forall (fun (cell: WorldCell) -> (Map.find cell.Id world) = cell) expectedCells
+        let action (iworld: TheWorld) = 
+            List.fold (fun (cworld: TheWorld) (id, action) -> Map.add id (action cworld.[id]) cworld) iworld actions
         predicate, action
 
     let getWorldChangeTransactions actions =
@@ -258,11 +248,11 @@ module World =
         |> Map.map (fun uid cell -> { cell with Pheromones = cell.Pheromones |> Map.map (fun key quantity -> max (quantity - 1) 0) } )
 
     let applyWorldTransactions (oldWorld: TheWorld) changes = 
-        Seq.fold (fun (world: TheWorld) (pred, action) ->
-                    if pred world 
-                    then action world  
-                    else world) 
-                    oldWorld changes
+        let foldAction (world: TheWorld) (pred, action) =
+            if pred world 
+            then action world  
+            else world        
+        Seq.fold foldAction oldWorld changes
 
     let uid2xy (uid: UID) = uid.X, uid.Y
 
@@ -285,28 +275,22 @@ module Canvas =
     let ($) s n = s + n.ToString()
     let rgb r g b = "rgb(" $ r $ "," $ g $ "," $ b $ ")"
 
-    /// Fill rectangle with given color
+    // Fill rectangle with given color
     let filled (color: string) rect =
         let ctx = context
         ctx.fillStyle <- !^ color
         ctx.fillRect rect
 
-    let drawBlob (color: string) (x, y) =
+    let drawBlob (color: string) size (x, y) =
         context.beginPath()
-        context.arc(x, y, 4., 0., 2. * System.Math.PI, false )
+        context.arc(x, y, size, 0., 2. * System.Math.PI, false )
         context.fillStyle <- !^ color
         context.fill()
-
-    /// Move element to a specified X Y position
-    let position (x,y) (img : HTMLImageElement) =
-        img?style?left <- x.ToString() + "px"
-        img?style?top <- (canvas.offsetTop + y).ToString() + "px"
 
     let getWindowDimensions () =
         canvas.width, canvas.height
 
-    /// Get the first <img /> element and set `src` (do
-    /// nothing if it is the right one to keep animation)
+
     let image (src:string) =
         let image = document.getElementsByTagName("img").[0] :?> HTMLImageElement
         if image.src.IndexOf(src) = -1 then image.src <- src
@@ -327,21 +311,27 @@ module Simulation =
         let color = 
             match antColor with
             | AntColor.Black -> rgb 0 0 0
-            | AntColor.Red -> rgb 174 0 0
-        drawBlob color (x, y)
+            | AntColor.Red -> rgb 255 0 0
+        drawBlob color 4. (x, y)
 
-    let drawFood x y = 
+    let drawFood food x y = 
+        let radius = ((float food / float maxTotalFoodPerSquare) * 3.) + 1.
         let color = rgb 0 255 0
-        drawBlob color (x, y)
+        drawBlob color radius (x, y)
 
-    let makeGradiant quantity max = (float quantity / float max)
+    let makeGradiant quantity max = 
+        let inverseGrediant = 1. - (float quantity / float max)
+        let levelDiff = 200. - 111. // difference between the "full pheromone color and background"
+        levelDiff * inverseGrediant
     let drawPheromone x y antColor amount =
+        let opacityFudge = makeGradiant amount maxCellPheromoneQuantity
+        let level = int opacityFudge + 111
+        // console.log(sprintf "level: %d" level)
         let color = 
             match antColor with                    
-            | AntColor.Black -> rgb 111 111 111
-            | AntColor.Red -> rgb 111 0 111
-        // let opacity = makeGradiant amount maxAntDropPheromoneQunatity
-        drawBlob color (x, y)
+            | AntColor.Black -> rgb level level level
+            | AntColor.Red -> rgb level opacityFudge level
+        drawBlob color 4. (x, y)
 
     let drawUpdates (width, height) (world: TheWorld) =
         let updateCell uid cell =
@@ -350,7 +340,7 @@ module Simulation =
             let x, y = uid2xy uid
             let ox, oy = offset (float x) (float y)
             cell.Pheromones |> Map.iter (fun color amount -> if amount > 0 then drawPheromone ox oy color amount)
-            if cell.Food > 0 then drawFood ox oy                                     
+            if cell.Food > 0 then drawFood cell.Food ox oy                                     
             if cell.Ant.IsSome then drawAnt ox oy cell.Ant.Value.Color
         world
         |> Map.iter updateCell
@@ -623,7 +613,7 @@ let render (w,h) =
     updateInput "secondline" remainingString |> ignore
 
 
-    (0., 0., w, h) |> filled (rgb 174 238 238)
+    (0., 0., w, h) |> filled (rgb 200 200 200)
     drawUpdates (w,h) !world
     world := worldCycle blackAI redAI !world
 
