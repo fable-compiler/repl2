@@ -6,6 +6,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## 2.1.2 - 2021-04-07
+
+* Add sample: @Rickasaurus 's F# Ant Colony game to Fable. @robertpi
+
 ## 2.1.1 - 2020-07-08
 
 * Update fable-standalone
