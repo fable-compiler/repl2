@@ -274,6 +274,12 @@
                         "label": "Pacman",
                         "fsharpCode": "games/pacman.fs",
                         "htmlCode": "games/pacman.html"
+                    },
+                    {
+                        "type": "menu-item",
+                        "label": "Undertone - Programmable music",
+                        "fsharpCode": "games/undertone.fs",
+                        "htmlCode": "games/undertone.html"
                     }
                 ]
             },
